@@ -8,6 +8,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::vec::Vec;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone)]
 pub struct Network {
@@ -365,7 +366,7 @@ impl NetworkUi {
             .success()
     }
 
-    fn get_password(&self) -> String {
+    fn get_password(&self) -> Zeroizing<String> {
         let height = 3;
         let width = 50;
         let password_win = newwin(height, width, (LINES() - height) / 2, (COLS() - width) / 2);
@@ -374,7 +375,7 @@ impl NetworkUi {
         wrefresh(password_win);
 
         // Capture user input
-        let mut password = String::new();
+        let mut password = Zeroizing::new(String::new());
         let mut ch: i32;
         loop {
             ch = wgetch(password_win);

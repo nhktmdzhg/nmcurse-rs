@@ -26,7 +26,6 @@ impl Ui {
         nonl();
         raw();
 
-        start_color();
         use_default_colors();
         let win = newwin(LINES(), COLS(), 0, 0);
         Ui {
