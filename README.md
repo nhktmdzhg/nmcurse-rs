@@ -20,3 +20,8 @@ RUSTFLAGS="-C opt-level=3 -C target-cpu=native" cargo build --release
 ```bash
 target/release/nmcurse
 ```
+
+## AUR
+```
+$AUR_HELPER -S nmcurse-rs-git
+```
