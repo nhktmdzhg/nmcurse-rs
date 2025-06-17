@@ -227,9 +227,11 @@ impl NetworkUi {
                 std::cmp::Ordering::Greater
             }
         });
+        output.wait().unwrap();
     }
 
     pub fn scan(&mut self) {
+        self.ui.clear();
         let (tx, rx) = mpsc::channel();
         let ui_clone = Arc::new(Mutex::new(self.ui.clone()));
         let loading_thread = thread::spawn(move || unsafe {
@@ -239,7 +241,7 @@ impl NetworkUi {
                     break;
                 } else {
                     ui.loading_animation("Scanning for networks...");
-                    thread::sleep(std::time::Duration::from_millis(200));
+                    thread::sleep(std::time::Duration::from_millis(50));
                 }
             }
         });
@@ -276,6 +278,7 @@ impl NetworkUi {
                 self.connections.push(connection);
             }
         }
+        output.wait().unwrap();
     }
 
     fn get_input(&self) -> i32 {
@@ -313,7 +316,7 @@ impl NetworkUi {
         input
     }
 
-    pub fn select_network(&mut self) -> String {
+    pub fn select_network(&mut self) -> Option<String> {
         let mut input = self.get_input();
 
         while input != ERR && input != 13 && input != 'q' as i32 && input != 27 {
@@ -341,10 +344,10 @@ impl NetworkUi {
         }
 
         if input == ERR || input == 'q' as i32 || input == 27 {
-            return String::new();
+            return None;
         }
 
-        self.networks[self.highlight].ssid.clone()
+        Some(self.networks[self.highlight].ssid.clone())
     }
 
     fn is_password_cached(&self, network: &String) -> bool {
@@ -406,7 +409,7 @@ impl NetworkUi {
     }
 
     pub fn connect(&self, network: &String) {
-        if network.is_empty() {
+        if network.is_empty() || self.networks.iter().any(|n| n.ssid == *network) {
             return;
         }
 
@@ -449,7 +452,7 @@ impl NetworkUi {
                     ui.loading_animation(
                         format!("Connecting to {}...", network_for_thread).as_str(),
                     );
-                    thread::sleep(std::time::Duration::from_millis(200));
+                    thread::sleep(std::time::Duration::from_millis(50));
                 }
             }
         });
@@ -481,7 +484,7 @@ impl NetworkUi {
                     ui.loading_animation(
                         format!("Disconnecting from {}...", network_for_thread).as_str(),
                     );
-                    thread::sleep(std::time::Duration::from_millis(200));
+                    thread::sleep(std::time::Duration::from_millis(50));
                 }
             }
         });
@@ -513,7 +516,7 @@ impl NetworkUi {
                     ui.loading_animation(
                         format!("Forgetting password for {}...", network_for_thread).as_str(),
                     );
-                    thread::sleep(std::time::Duration::from_millis(200));
+                    thread::sleep(std::time::Duration::from_millis(50));
                 }
             }
         });
