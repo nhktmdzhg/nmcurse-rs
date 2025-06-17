@@ -409,7 +409,7 @@ impl NetworkUi {
     }
 
     pub fn connect(&self, network: &String) {
-        if network.is_empty() || self.networks.iter().any(|n| n.ssid == *network) {
+        if network.is_empty() || self.connections.iter().any(|c| c == network) {
             return;
         }
 
