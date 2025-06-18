@@ -12,15 +12,16 @@ use zeroize::Zeroizing;
 
 #[derive(Debug, Clone)]
 pub struct Network {
+    pub in_use: bool,
     pub ssid: String,
+    pub bssid: String,
     pub security: String,
-    pub signal: i32,
+    pub signal: u8,
 }
 
 pub struct NetworkUi {
     highlight: usize,
     networks: Vec<Network>,
-    connections: Vec<String>,
     ui: Ui,
 }
 
@@ -29,14 +30,11 @@ impl NetworkUi {
         NetworkUi {
             highlight: 0,
             networks: Vec::new(),
-            connections: Vec::new(),
             ui: Ui::new(),
         }
     }
 
     pub fn display_networks(&mut self) {
-        self.get_current_connections();
-
         unsafe { werase(self.ui.win()) };
         if self.networks.is_empty() {
             wrefresh(self.ui.win());
@@ -89,8 +87,6 @@ impl NetworkUi {
 
         let mut color: u32;
         for i in start_index..end_index {
-            let is_connected = self.connections.contains(&self.networks[i].ssid);
-
             if self.networks[i].signal >= 66 {
                 color = COLOR_PAIR(3);
             } else if self.networks[i].signal >= 33 {
@@ -100,7 +96,7 @@ impl NetworkUi {
             }
 
             let mut ss: String = String::new();
-            if is_connected {
+            if self.networks[i].in_use {
                 color |= ncurses::A_BOLD;
                 ss.push_str("> ");
             } else {
@@ -157,12 +153,12 @@ impl NetworkUi {
         wrefresh(self.ui.win());
     }
 
-    fn run_scan(&mut self) {
+    pub fn run_scan(&mut self) {
         self.networks.clear();
         let mut output = Command::new("nmcli")
             .args(&[
                 "-f",
-                "SSID,SECURITY,SIGNAL",
+                "IN-USE,SSID,BSSID,SECURITY,SIGNAL",
                 "--mode",
                 "multiline",
                 "--terse",
@@ -173,47 +169,44 @@ impl NetworkUi {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .expect("Failed to run nmcli command");
+            .unwrap();
 
-        let stdout = output.stdout.take().expect("Failed to capture stdout");
+        let stdout = output.stdout.take().unwrap();
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
                 if let Ok(line) = line {
-                    sender.send(line).expect("Failed to send line");
+                    sender.send(line).unwrap();
                 }
             }
         });
 
         let mut network = Network {
+            in_use: false,
             ssid: String::new(),
+            bssid: String::new(),
             security: String::new(),
             signal: 0,
         };
 
         for line in receiver {
-            if line.starts_with("SSID:") {
+            if line.starts_with("IN-USE:") {
+                network.in_use = line[7..].trim() == "*";
+            } else if line.starts_with("SSID:") {
                 network.ssid = line[5..].trim().to_string();
+            } else if line.starts_with("BSSID:") {
+                network.bssid = line[6..].trim().to_string();
             } else if line.starts_with("SECURITY:") {
                 network.security = line[9..].trim().to_string();
             } else if line.starts_with("SIGNAL:") {
-                network.signal = line[7..].trim().parse::<i32>().unwrap_or(0);
-
-                if let Some(existing) = self
-                    .networks
-                    .iter_mut()
-                    .find(|n| n.ssid == network.ssid && n.security == network.security)
-                {
-                    if network.signal > existing.signal {
-                        existing.signal = network.signal;
-                    }
-                } else {
-                    self.networks.push(network.clone());
-                }
+                network.signal = line[7..].trim().parse::<u8>().unwrap_or(0);
+                self.networks.push(network.clone());
 
                 network = Network {
+                    in_use: false,
                     ssid: String::new(),
+                    bssid: String::new(),
                     security: String::new(),
                     signal: 0,
                 };
@@ -251,36 +244,6 @@ impl NetworkUi {
         loading_thread.join().unwrap();
     }
 
-    fn get_current_connections(&mut self) {
-        self.connections.clear();
-        let mut output = Command::new("nmcli")
-            .args(&["-t", "-f", "NAME", "connection", "show", "--active"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("Failed to run nmcli command");
-
-        let stdout = output.stdout.take().expect("Failed to capture stdout");
-        let (sender, receiver) = mpsc::channel();
-
-        thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    sender.send(line).expect("Failed to send line");
-                }
-            }
-        });
-
-        for line in receiver {
-            let connection = line.trim().to_string();
-            if !connection.is_empty() {
-                self.connections.push(connection);
-            }
-        }
-        output.wait().unwrap();
-    }
-
     fn get_input(&self) -> i32 {
         set_escdelay(0);
         let mut input = wgetch(self.ui.win());
@@ -316,7 +279,7 @@ impl NetworkUi {
         input
     }
 
-    pub fn select_network(&mut self) -> Option<String> {
+    pub fn select_network(&mut self) -> Option<usize> {
         let mut input = self.get_input();
 
         while input != ERR && input != 13 && input != 'q' as i32 && input != 27 {
@@ -328,14 +291,14 @@ impl NetworkUi {
             } else if self.highlight < self.networks.len() - 1 && input == 66 {
                 self.highlight += 1;
             } else if input == 'd' as i32 {
-                for connection in &self.connections {
-                    if self.networks[self.highlight].ssid == *connection {
-                        self.disconnect(connection);
-                    }
+                if self.networks[self.highlight].in_use {
+                    self.disconnect(&self.networks[self.highlight].ssid);
+                    self.run_scan();
                 }
             } else if input == 'f' as i32 {
                 if self.is_password_cached(&self.networks[self.highlight].ssid) {
                     self.forget_password(&self.networks[self.highlight].ssid);
+                    self.run_scan();
                 }
             }
 
@@ -347,7 +310,7 @@ impl NetworkUi {
             return None;
         }
 
-        Some(self.networks[self.highlight].ssid.clone())
+        Some(self.highlight)
     }
 
     fn is_password_cached(&self, network: &String) -> bool {
@@ -408,15 +371,15 @@ impl NetworkUi {
         password
     }
 
-    pub fn connect(&self, network: &String) {
-        if network.is_empty() || self.connections.iter().any(|c| c == network) {
+    pub fn connect(&self, index: usize) {
+        if self.networks[index].bssid.is_empty() || self.networks[index].in_use {
             return;
         }
 
         self.ui.clear();
         let mut cmd = Command::new("nmcli");
-        if self.is_password_cached(network) {
-            cmd.args(&["con", "up", "id", network]);
+        if self.is_password_cached(&self.networks[index].ssid) {
+            cmd.args(&["con", "up", "id", self.networks[index].ssid.as_str()]);
         } else {
             // Create a new window for password input
             let pass_win = newwin(3, COLS(), LINES() / 2 - 1, 0);
@@ -424,25 +387,19 @@ impl NetworkUi {
             let password = self.get_password();
             delwin(pass_win);
 
-            if password.is_empty() {
-                return; // User cancelled password input
-            }
+            cmd.args(&["dev", "wifi", "connect", &self.networks[index].bssid]);
 
-            cmd.args(&[
-                "dev",
-                "wifi",
-                "connect",
-                network,
-                "password",
-                password.as_str(),
-            ]);
+            if !password.is_empty() {
+                cmd.arg("password");
+                cmd.arg(password.as_str());
+            }
         }
         cmd.stderr(Stdio::null()).stdout(Stdio::null());
         self.ui.clear();
 
         let (tx, rx) = mpsc::channel();
         let ui_clone = Arc::new(Mutex::new(self.ui.clone()));
-        let network_for_thread = network.clone();
+        let network_for_thread = self.networks[index].ssid.clone();
         let loading_thread = thread::spawn(move || unsafe {
             let mut ui = ui_clone.lock().unwrap();
             loop {
@@ -461,7 +418,7 @@ impl NetworkUi {
         loading_thread.join().unwrap();
     }
 
-    pub fn disconnect(&self, network: &String) {
+    fn disconnect(&self, network: &String) {
         if network.is_empty() {
             return;
         }
@@ -493,7 +450,7 @@ impl NetworkUi {
         loading_thread.join().unwrap();
     }
 
-    pub fn forget_password(&self, network: &String) {
+    fn forget_password(&self, network: &String) {
         if network.is_empty() {
             return;
         }

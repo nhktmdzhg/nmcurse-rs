@@ -1,9 +1,10 @@
+use std::iter::Cycle;
+
 use ncurses::{COLOR_PAIR, *};
 
 pub struct Ui {
     win: WINDOW,
-    spinner: Vec<&'static str>,
-    index: usize,
+    spinner: Cycle<std::vec::IntoIter<&'static str>>,
 }
 
 unsafe impl Send for Ui {}
@@ -30,8 +31,9 @@ impl Ui {
         let win = newwin(LINES(), COLS(), 0, 0);
         Ui {
             win,
-            spinner: vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-            index: 0,
+            spinner: vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+                .into_iter()
+                .cycle(),
         }
     }
 
@@ -60,16 +62,13 @@ impl Ui {
             self.win,
             1,
             1,
-            format!("{} {}", message, self.spinner[self.index]).as_str(),
+            format!("{} {}", message, self.spinner.next().unwrap()).as_str(),
         );
         mvwhline(self.win, 2, 1, 0, getmaxx(self.win) - 2);
         wattroff(self.win, COLOR_PAIR(5).try_into().unwrap());
 
         // Refresh the window to show changes
         wrefresh(self.win);
-
-        // Update the spinner index
-        self.index = (self.index + 1) % self.spinner.len();
     }
 
     pub(crate) fn win(&self) -> WINDOW {
@@ -82,7 +81,6 @@ impl Clone for Ui {
         Ui {
             win: self.win,
             spinner: self.spinner.clone(),
-            index: self.index,
         }
     }
 }

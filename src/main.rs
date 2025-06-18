@@ -8,11 +8,12 @@ fn main() {
     ui.display_networks();
 
     loop {
-        let network_name = ui.select_network();
-        if network_name.is_none() {
+        let network_index = ui.select_network();
+        if network_index.is_none() {
             break;
         }
-        ui.connect(&network_name.unwrap());
+        ui.connect(network_index.unwrap());
+        ui.run_scan();
         ui.display_networks();
     }
 }
