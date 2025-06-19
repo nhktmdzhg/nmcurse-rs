@@ -9,10 +9,11 @@ fn main() {
 
     loop {
         let network_index = ui.select_network();
-        if network_index.is_none() {
+        if let Some(network_index) = network_index {
+            ui.connect(network_index);
+        } else {
             break;
         }
-        ui.connect(network_index.unwrap());
         ui.run_scan();
         ui.display_networks();
     }

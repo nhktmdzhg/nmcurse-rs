@@ -171,16 +171,7 @@ impl NetworkUi {
             .spawn()
             .unwrap();
 
-        let stdout = output.stdout.take().unwrap();
-        let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    sender.send(line).unwrap();
-                }
-            }
-        });
+        let reader = BufReader::new(output.stdout.take().unwrap());
 
         let mut network = Network {
             in_use: false,
@@ -190,7 +181,7 @@ impl NetworkUi {
             signal: 0,
         };
 
-        for line in receiver {
+        for line in reader.lines().filter_map(|l| l.ok()) {
             if line.starts_with("IN-USE:") {
                 network.in_use = line[7..].trim() == "*";
             } else if line.starts_with("SSID:") {
@@ -323,7 +314,7 @@ impl NetworkUi {
                 "show",
                 network,
             ])
-            .stdout(Stdio::piped())
+            .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .and_then(|child| child.wait_with_output())
@@ -390,8 +381,7 @@ impl NetworkUi {
             cmd.args(&["dev", "wifi", "connect", &self.networks[index].bssid]);
 
             if !password.is_empty() {
-                cmd.arg("password");
-                cmd.arg(password.as_str());
+                cmd.args(&["password", password.as_str()]);
             }
         }
         cmd.stderr(Stdio::null()).stdout(Stdio::null());
