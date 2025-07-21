@@ -2,8 +2,10 @@ extern crate ncurses;
 mod network;
 mod ui;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ui = network::NetworkUi::new();
+
+    // Initial scan with error handling
     ui.scan();
     ui.display_networks();
 
@@ -14,7 +16,9 @@ fn main() {
         } else {
             break;
         }
-        ui.run_scan();
+        let _ = ui.run_scan();
         ui.display_networks();
     }
+
+    Ok(())
 }

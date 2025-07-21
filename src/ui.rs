@@ -42,18 +42,17 @@ impl Ui {
         wrefresh(self.win);
     }
 
-    pub unsafe fn loading_animation(&mut self, message: &str) {
+    pub fn loading_animation(&mut self, message: &str) {
         // Current terminal size
         let mut max_y: i32 = 0;
         let mut max_x: i32 = 0;
         getmaxyx(self.win, &mut max_y, &mut max_x);
-
         // Adjust window size if necessary
         wresize(self.win, max_y, max_x);
         mvwin(self.win, 0, 0);
 
         // Clear the window
-        self::clear();
+        self.clear();
         refresh();
 
         // Draw the message with the spinner

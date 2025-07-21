@@ -10,6 +10,25 @@ use std::thread;
 use std::vec::Vec;
 use zeroize::Zeroizing;
 
+// Constants for UI and signal thresholds
+const STRONG_SIGNAL_THRESHOLD: u8 = 66;
+const MEDIUM_SIGNAL_THRESHOLD: u8 = 33;
+const ENTER_KEY: i32 = 13;
+const ESCAPE_KEY: i32 = 27;
+const UP_ARROW: i32 = 65;
+const DOWN_ARROW: i32 = 66;
+const BACKSPACE_KEY: i32 = 127;
+const BACKSPACE_KEY_ALT: i32 = 8;
+
+// Error types for better error handling
+#[derive(Debug)]
+#[allow(dead_code)] // Allow unused variants for future use
+pub enum NetworkError {
+    CommandFailed(String),
+    NoNetworks,
+    InvalidInput,
+}
+
 #[derive(Debug, Clone)]
 pub struct Network {
     pub in_use: bool,
@@ -17,6 +36,29 @@ pub struct Network {
     pub bssid: String,
     pub security: String,
     pub signal: u8,
+}
+
+impl Network {
+    pub fn new() -> Self {
+        Network {
+            in_use: false,
+            ssid: String::new(),
+            bssid: String::new(),
+            security: String::new(),
+            signal: 0,
+        }
+    }
+
+    #[allow(dead_code)] // Keep for future use
+    pub fn is_empty(&self) -> bool {
+        self.ssid.is_empty() && self.bssid.is_empty()
+    }
+}
+
+impl Default for Network {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 pub struct NetworkUi {
@@ -41,6 +83,30 @@ impl NetworkUi {
             return;
         }
 
+        let (_max_ssid_length, max_security_length) = self.calculate_max_lengths();
+
+        // Calculate the maximum length of SSID and security strings to fit the window
+        // -6 for padding and formatting
+        let max_combined_length: usize =
+            std::cmp::max(0, getmaxx(self.ui.win()) - max_security_length as i32 - 6) as usize;
+        // Calculate the window height, leaving space for the header and footer
+        let win_height: usize = std::cmp::max(0, getmaxy(self.ui.win()) - 4) as usize;
+
+        let (start_index, end_index) = self.calculate_display_range(win_height);
+
+        self.draw_header_and_footer();
+
+        self.render_networks(
+            start_index,
+            end_index,
+            max_combined_length,
+            max_security_length,
+        );
+
+        wrefresh(self.ui.win());
+    }
+
+    fn calculate_max_lengths(&self) -> (usize, usize) {
         let mut max_ssid_length = 3;
         let mut max_security_length = 3;
         for network in &self.networks {
@@ -51,19 +117,17 @@ impl NetworkUi {
                 max_security_length = network.security.len();
             }
         }
+        (max_ssid_length, max_security_length)
+    }
 
-        // Calculate the maximum length of SSID and security strings to fit the window
-        // -6 for padding and formatting
-        let max_combined_length: usize =
-            std::cmp::max(0, getmaxx(self.ui.win()) - max_security_length as i32 - 6) as usize;
-        // Calculate the window height, leaving space for the header and footer
-        let win_height: usize = std::cmp::max(0, getmaxy(self.ui.win()) - 4) as usize;
-
+    fn calculate_display_range(&self, win_height: usize) -> (usize, usize) {
         let start_index: usize =
             std::cmp::max(0, self.highlight as i32 - win_height as i32 + 1) as usize;
         let end_index: usize = std::cmp::min(self.networks.len(), start_index + win_height);
+        (start_index, end_index)
+    }
 
-        // Display the header
+    fn draw_header_and_footer(&self) {
         wattron(self.ui.win(), COLOR_PAIR(5));
         let _ = mvwprintw(self.ui.win(), 1, 3, "Available Networks");
         mvwhline(self.ui.win(), 2, 1, 0, getmaxx(self.ui.win()) - 2);
@@ -84,78 +148,100 @@ impl NetworkUi {
         );
 
         wattroff(self.ui.win(), COLOR_PAIR(5));
-
-        let mut color: u32;
-        for i in start_index..end_index {
-            if self.networks[i].signal >= 66 {
-                color = COLOR_PAIR(3);
-            } else if self.networks[i].signal >= 33 {
-                color = COLOR_PAIR(2);
-            } else {
-                color = COLOR_PAIR(1);
-            }
-
-            let mut ss: String = String::new();
-            if self.networks[i].in_use {
-                color |= ncurses::A_BOLD;
-                ss.push_str("> ");
-            } else {
-                ss.push_str("  ");
-            }
-
-            let mut ssid = if self.networks[i].ssid.is_empty() {
-                String::from("---")
-            } else {
-                self.networks[i].ssid.clone()
-            };
-            let security = if self.networks[i].security.is_empty() {
-                String::from("---")
-            } else {
-                self.networks[i].security.clone()
-            };
-
-            // Truncate SSID and security strings to fit the window
-            if ssid.len() > max_combined_length {
-                ssid.truncate(max_combined_length - 3);
-                ssid.push_str("...");
-            }
-            ss.push_str(
-                format!(
-                    "{:<width_ssid$}{:<width_security$}  ",
-                    ssid,
-                    security,
-                    width_ssid = max_combined_length,
-                    width_security = max_security_length,
-                )
-                .as_str(),
-            );
-
-            wattron(
-                self.ui.win(),
-                if i == self.highlight {
-                    color | ncurses::A_REVERSE
-                } else {
-                    color
-                },
-            );
-            //Adjust position relative to the visible range
-            let _ = mvwprintw(self.ui.win(), (i - start_index + 3) as i32, 1, &ss);
-            wattroff(
-                self.ui.win(),
-                if i == self.highlight {
-                    color | ncurses::A_REVERSE
-                } else {
-                    color
-                },
-            );
-        }
-
-        wrefresh(self.ui.win());
     }
 
-    pub fn run_scan(&mut self) {
+    fn render_networks(
+        &self,
+        start_index: usize,
+        end_index: usize,
+        max_combined_length: usize,
+        max_security_length: usize,
+    ) {
+        for i in start_index..end_index {
+            let color = self.get_signal_color(self.networks[i].signal);
+            self.render_single_network(
+                i,
+                start_index,
+                color,
+                max_combined_length,
+                max_security_length,
+            );
+        }
+    }
+
+    fn get_signal_color(&self, signal: u8) -> u32 {
+        if signal >= STRONG_SIGNAL_THRESHOLD {
+            COLOR_PAIR(3)
+        } else if signal >= MEDIUM_SIGNAL_THRESHOLD {
+            COLOR_PAIR(2)
+        } else {
+            COLOR_PAIR(1)
+        }
+    }
+
+    fn render_single_network(
+        &self,
+        i: usize,
+        start_index: usize,
+        mut color: u32,
+        max_combined_length: usize,
+        max_security_length: usize,
+    ) {
+        let mut ss = String::new();
+        if self.networks[i].in_use {
+            color |= ncurses::A_BOLD();
+            ss.push_str("> ");
+        } else {
+            ss.push_str("  ");
+        }
+
+        let ssid = self.format_ssid(&self.networks[i].ssid, max_combined_length);
+        let security = self.format_security(&self.networks[i].security);
+
+        ss.push_str(&format!(
+            "{:<width_ssid$}{:<width_security$}  ",
+            ssid,
+            security,
+            width_ssid = max_combined_length,
+            width_security = max_security_length,
+        ));
+
+        let display_color = if i == self.highlight {
+            color | ncurses::A_REVERSE()
+        } else {
+            color
+        };
+
+        wattron(self.ui.win(), display_color);
+        let _ = mvwprintw(self.ui.win(), (i - start_index + 3) as i32, 1, &ss);
+        wattroff(self.ui.win(), display_color);
+    }
+
+    fn format_ssid(&self, ssid: &str, max_length: usize) -> String {
+        let mut result = if ssid.is_empty() {
+            String::from("---")
+        } else {
+            ssid.to_string()
+        };
+
+        if result.len() > max_length {
+            result.truncate(max_length - 3);
+            result.push_str("...");
+        }
+        result
+    }
+
+    fn format_security(&self, security: &str) -> String {
+        if security.is_empty() {
+            String::from("---")
+        } else {
+            security.to_string()
+        }
+    }
+
+    pub fn run_scan(&mut self) -> Result<(), NetworkError> {
         self.networks.clear();
-        let mut output = Command::new("nmcli")
+        let output = Command::new("nmcli")
             .args(&[
                 "-f",
                 "IN-USE,SSID,BSSID,SECURITY,SIGNAL",
@@ -168,18 +254,16 @@ impl NetworkUi {
             ])
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+            .spawn();
 
-        let reader = BufReader::new(output.stdout.take().unwrap());
-
-        let mut network = Network {
-            in_use: false,
-            ssid: String::new(),
-            bssid: String::new(),
-            security: String::new(),
-            signal: 0,
+        let mut child = match output {
+            Ok(child) => child,
+            Err(e) => return Err(NetworkError::CommandFailed(e.to_string())),
         };
+
+        let reader = BufReader::new(child.stdout.take().unwrap());
+
+        let mut network = Network::new();
 
         for line in reader.lines().filter_map(|l| l.ok()) {
             if line.starts_with("IN-USE:") {
@@ -193,35 +277,28 @@ impl NetworkUi {
             } else if line.starts_with("SIGNAL:") {
                 network.signal = line[7..].trim().parse::<u8>().unwrap_or(0);
                 self.networks.push(network.clone());
-
-                network = Network {
-                    in_use: false,
-                    ssid: String::new(),
-                    bssid: String::new(),
-                    security: String::new(),
-                    signal: 0,
-                };
+                network = Network::new();
             }
         }
 
-        self.networks.sort_by(|a, b| {
-            if a.signal > b.signal {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
-            }
-        });
-        output.wait().unwrap();
+        self.networks.sort_by(|a, b| b.signal.cmp(&a.signal));
+        let _ = child.wait();
+
+        if self.networks.is_empty() {
+            Err(NetworkError::NoNetworks)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn scan(&mut self) {
         self.ui.clear();
         let (tx, rx) = mpsc::channel();
         let ui_clone = Arc::new(Mutex::new(self.ui.clone()));
-        let loading_thread = thread::spawn(move || unsafe {
+        let loading_thread = thread::spawn(move || {
             let mut ui = ui_clone.lock().unwrap();
             loop {
-                if let Ok(_) = rx.try_recv() {
+                if rx.try_recv().is_ok() {
                     break;
                 } else {
                     ui.loading_animation("Scanning for networks...");
@@ -230,7 +307,7 @@ impl NetworkUi {
             }
         });
 
-        self.run_scan();
+        let _ = self.run_scan(); // Ignore scan errors for now
         tx.send(()).unwrap();
         loading_thread.join().unwrap();
     }
@@ -243,13 +320,13 @@ impl NetworkUi {
         }
 
         // Fix for alt/escape/arrows (also f-keys on some terminals)
-        if input == 27 {
+        if input == ESCAPE_KEY {
             nodelay(self.ui.win(), true);
             input = wgetch(self.ui.win());
             nodelay(self.ui.win(), false);
 
             if input == ERR {
-                return 27;
+                return ESCAPE_KEY;
             }
 
             if input != 91 {
@@ -265,46 +342,64 @@ impl NetworkUi {
                 return input;
             }
 
-            return 27;
+            return ESCAPE_KEY;
         }
         input
     }
 
     pub fn select_network(&mut self) -> Option<usize> {
+        if self.networks.is_empty() {
+            return None;
+        }
+
         let mut input = self.get_input();
 
-        while input != ERR && input != 13 && input != 'q' as i32 && input != 27 {
-            if input == 'r' as i32 {
-                self.scan();
-                self.highlight = 0;
-            } else if self.highlight > 0 && input == 65 {
-                self.highlight -= 1;
-            } else if self.highlight < self.networks.len() - 1 && input == 66 {
-                self.highlight += 1;
-            } else if input == 'd' as i32 {
-                if self.networks[self.highlight].in_use {
-                    self.disconnect(&self.networks[self.highlight].ssid);
-                    self.run_scan();
+        while input != ERR && input != ENTER_KEY && input != 'q' as i32 && input != ESCAPE_KEY {
+            match input {
+                _ if input == 'r' as i32 => {
+                    self.scan();
+                    self.highlight = 0;
                 }
-            } else if input == 'f' as i32 {
-                if self.is_password_cached(&self.networks[self.highlight].ssid) {
-                    self.forget_password(&self.networks[self.highlight].ssid);
-                    self.run_scan();
+                UP_ARROW if self.highlight > 0 => {
+                    self.highlight -= 1;
                 }
+                DOWN_ARROW if self.highlight < self.networks.len() - 1 => {
+                    self.highlight += 1;
+                }
+                _ if input == 'd' as i32 => {
+                    if self.highlight < self.networks.len() && self.networks[self.highlight].in_use
+                    {
+                        self.disconnect(&self.networks[self.highlight].ssid);
+                        let _ = self.run_scan();
+                    }
+                }
+                _ if input == 'f' as i32 => {
+                    if self.highlight < self.networks.len()
+                        && self.is_password_cached(&self.networks[self.highlight].ssid)
+                    {
+                        self.forget_password(&self.networks[self.highlight].ssid);
+                        let _ = self.run_scan();
+                    }
+                }
+                _ => {} // Ignore unknown input
             }
 
             self.display_networks();
             input = self.get_input();
         }
 
-        if input == ERR || input == 'q' as i32 || input == 27 {
+        if input == ERR || input == 'q' as i32 || input == ESCAPE_KEY {
             return None;
         }
 
-        Some(self.highlight)
+        if self.highlight < self.networks.len() {
+            Some(self.highlight)
+        } else {
+            None
+        }
     }
 
-    fn is_password_cached(&self, network: &String) -> bool {
+    fn is_password_cached(&self, network: &str) -> bool {
         Command::new("nmcli")
             .args(&[
                 "-t",
@@ -318,30 +413,30 @@ impl NetworkUi {
             .stderr(Stdio::null())
             .spawn()
             .and_then(|child| child.wait_with_output())
-            .unwrap()
-            .status
-            .success()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
     }
 
     fn get_password(&self) -> Zeroizing<String> {
         let height = 3;
         let width = 50;
         let password_win = newwin(height, width, (LINES() - height) / 2, (COLS() - width) / 2);
+
         box_(password_win, 0, 0);
         let _ = mvwprintw(password_win, 1, 1, "Enter password:");
         wrefresh(password_win);
 
         // Capture user input
         let mut password = Zeroizing::new(String::new());
-        let mut ch: i32;
         loop {
-            ch = wgetch(password_win);
-            if ch == 13 {
+            let ch = wgetch(password_win);
+            if ch == ENTER_KEY {
                 break; // Enter key
-            } else if ch == 27 {
+            } else if ch == ESCAPE_KEY {
                 password.clear(); // Escape key
                 break; // Clear password and exit
-            } else if ch == ncurses::KEY_BACKSPACE || ch == 127 || ch == 8 {
+            } else if ch == ncurses::KEY_BACKSPACE || ch == BACKSPACE_KEY || ch == BACKSPACE_KEY_ALT
+            {
                 // Handle backspace
                 if !password.is_empty() {
                     password.pop();
@@ -363,18 +458,24 @@ impl NetworkUi {
     }
 
     pub fn connect(&self, index: usize) {
-        if self.networks[index].bssid.is_empty() || self.networks[index].in_use {
+        if index >= self.networks.len()
+            || self.networks[index].bssid.is_empty()
+            || self.networks[index].in_use
+        {
             return;
         }
 
         self.ui.clear();
         let mut cmd = Command::new("nmcli");
+
         if self.is_password_cached(&self.networks[index].ssid) {
             cmd.args(&["con", "up", "id", self.networks[index].ssid.as_str()]);
         } else {
             // Create a new window for password input
             let pass_win = newwin(3, COLS(), LINES() / 2 - 1, 0);
-            ncurses::werase(pass_win);
+            unsafe {
+                werase(pass_win);
+            }
             let password = self.get_password();
             delwin(pass_win);
 
@@ -387,28 +488,15 @@ impl NetworkUi {
         cmd.stderr(Stdio::null()).stdout(Stdio::null());
         self.ui.clear();
 
-        let (tx, rx) = mpsc::channel();
-        let ui_clone = Arc::new(Mutex::new(self.ui.clone()));
-        let network_for_thread = self.networks[index].ssid.clone();
-        let loading_thread = thread::spawn(move || unsafe {
-            let mut ui = ui_clone.lock().unwrap();
-            loop {
-                if let Ok(_) = rx.try_recv() {
-                    break;
-                } else {
-                    ui.loading_animation(
-                        format!("Connecting to {}...", network_for_thread).as_str(),
-                    );
-                    thread::sleep(std::time::Duration::from_millis(50));
-                }
-            }
-        });
-        let _ = cmd.spawn().and_then(|mut child| child.wait());
-        tx.send(()).unwrap();
-        loading_thread.join().unwrap();
+        self.run_loading_animation(
+            format!("Connecting to {}...", self.networks[index].ssid),
+            move || {
+                let _ = cmd.spawn().and_then(|mut child| child.wait());
+            },
+        );
     }
 
-    fn disconnect(&self, network: &String) {
+    fn disconnect(&self, network: &str) {
         if network.is_empty() {
             return;
         }
@@ -419,28 +507,12 @@ impl NetworkUi {
             .stdout(Stdio::null());
         self.ui.clear();
 
-        let (tx, rx) = mpsc::channel();
-        let ui_clone = Arc::new(Mutex::new(self.ui.clone()));
-        let network_for_thread = network.clone();
-        let loading_thread = thread::spawn(move || unsafe {
-            let mut ui = ui_clone.lock().unwrap();
-            loop {
-                if let Ok(_) = rx.try_recv() {
-                    break;
-                } else {
-                    ui.loading_animation(
-                        format!("Disconnecting from {}...", network_for_thread).as_str(),
-                    );
-                    thread::sleep(std::time::Duration::from_millis(50));
-                }
-            }
+        self.run_loading_animation(format!("Disconnecting from {}...", network), move || {
+            let _ = cmd.spawn().and_then(|mut child| child.wait());
         });
-        let _ = cmd.spawn().and_then(|mut child| child.wait());
-        tx.send(()).unwrap();
-        loading_thread.join().unwrap();
     }
 
-    fn forget_password(&self, network: &String) {
+    fn forget_password(&self, network: &str) {
         if network.is_empty() {
             return;
         }
@@ -451,26 +523,47 @@ impl NetworkUi {
             .stdout(Stdio::null());
         self.ui.clear();
 
+        self.run_loading_animation(
+            format!("Forgetting password for {}...", network),
+            move || {
+                let _ = cmd.spawn().and_then(|mut child| child.wait());
+            },
+        );
+    }
+
+    fn run_loading_animation<F>(&self, message: String, operation: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
         let (tx, rx) = mpsc::channel();
         let ui_clone = Arc::new(Mutex::new(self.ui.clone()));
-        let network_for_thread = network.clone();
-        let loading_thread = thread::spawn(move || unsafe {
+
+        let loading_thread = thread::spawn(move || {
             let mut ui = ui_clone.lock().unwrap();
             loop {
-                if let Ok(_) = rx.try_recv() {
+                if rx.try_recv().is_ok() {
                     break;
                 } else {
-                    ui.loading_animation(
-                        format!("Forgetting password for {}...", network_for_thread).as_str(),
-                    );
+                    ui.loading_animation(&message);
                     thread::sleep(std::time::Duration::from_millis(50));
                 }
             }
         });
-        let _ = cmd.spawn().and_then(|mut child| child.wait());
+
+        // Run the operation in another thread
+        let operation_thread = thread::spawn(operation);
+
+        // Wait for operation to complete
+        operation_thread.join().unwrap();
+
+        // Signal loading thread to stop
         tx.send(()).unwrap();
         loading_thread.join().unwrap();
     }
 }
 
-unsafe impl Sync for NetworkUi {}
+impl Default for NetworkUi {
+    fn default() -> Self {
+        Self::new()
+    }
+}
