@@ -67,7 +67,7 @@ jobs:
   build:
     name: Build Linux binary
     needs: check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04  # Use older Ubuntu for better compatibility
     
     steps:
       - name: Checkout code
@@ -75,20 +75,20 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl
 
-      - name: Install dependencies for musl build
+      - name: Install ncurses development libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools musl-dev
-          
-      - name: Build release binary (musl/static)  
-        run: cargo build --release --target x86_64-unknown-linux-musl
+          sudo apt-get install -y libncurses5-dev libncursesw5-dev
+
+      - name: Build release binary with older ncurses
+        run: |
+          # Use older Ubuntu base for better compatibility
+          cargo build --release
 
       - name: Test binary
         run: |
-          file ./target/x86_64-unknown-linux-musl/release/nmcurse
+          ./target/release/nmcurse --version
           echo "Binary test passed"
 
       - name: Create artifact directory
@@ -96,7 +96,7 @@ jobs:
 
       - name: Copy binary to artifacts
         run: |
-          cp target/x86_64-unknown-linux-musl/release/nmcurse artifacts/nmcurse-linux-amd64
+          cp target/release/nmcurse artifacts/nmcurse-linux-amd64
           chmod +x artifacts/nmcurse-linux-amd64
 
       - name: Upload artifacts
@@ -148,13 +148,18 @@ jobs:
           echo "" >> release_notes.md
           echo "\`\`\`bash" >> release_notes.md
           echo "# Ubuntu/Debian:" >> release_notes.md
-          echo "sudo apt-get install libncurses6" >> release_notes.md
+          echo "sudo apt-get install libncurses5 libncurses6" >> release_notes.md
           echo "" >> release_notes.md
           echo "# CentOS/RHEL/Fedora:" >> release_notes.md
           echo "sudo dnf install ncurses-libs" >> release_notes.md
           echo "" >> release_notes.md
           echo "# Arch Linux:" >> release_notes.md
           echo "sudo pacman -S ncurses" >> release_notes.md
+          echo "\`\`\`" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "If you get 'libncurses.so.6 not found', try:" >> release_notes.md
+          echo "\`\`\`bash" >> release_notes.md
+          echo "sudo ln -sf /usr/lib/libncursesw.so.6 /usr/lib/libncurses.so.6" >> release_notes.md
           echo "\`\`\`" >> release_notes.md
           echo "" >> release_notes.md
           echo "Make the binary executable: \`chmod +x nmcurse-linux-amd64\`" >> release_notes.md
