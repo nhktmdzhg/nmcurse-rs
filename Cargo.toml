@@ -2,6 +2,12 @@
 name = "nmcurse"
 version = "0.1.0"
 edition = "2021"
+authors = ["nhktmdzhg"]
+description = "A network management tool using ncurses"
+repository = "https://github.com/nhktmdzhg/nmcurse-rs"
+license = "MIT"
+keywords = ["network", "ncurses", "wifi", "terminal", "tui"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 ncurses = "5.101.0"
