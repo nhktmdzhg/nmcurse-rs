@@ -76,14 +76,26 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install ncurses development libraries
+      - name: Install dependencies for static build
         run: |
           sudo apt-get update
-          sudo apt-get install -y libncurses5-dev libncursesw5-dev
-
-      - name: Build release binary with older ncurses
+          sudo apt-get install -y build-essential
+          
+      - name: Build and install static ncurses
         run: |
-          # Use older Ubuntu base for better compatibility
+          cd /tmp
+          wget http://ftp.gnu.org/pub/gnu/ncurses/ncurses-6.0.tar.gz
+          tar -xzf ncurses-6.0.tar.gz
+          cd ncurses-6.0
+          ./configure --enable-static --disable-shared --without-debug --prefix=/tmp/ncurses-static
+          make -j$(nproc)
+          make install
+          
+      - name: Build release binary with static ncurses
+        env:
+          PKG_CONFIG_PATH: /tmp/ncurses-static/lib/pkgconfig
+          RUSTFLAGS: "-C target-feature=+crt-static -L /tmp/ncurses-static/lib"
+        run: |
           cargo build --release
 
       - name: Test binary
